@@ -1,0 +1,9 @@
+google-generativeai>=0.8.3
+SpeechRecognition>=3.10.0
+pyaudio>=0.2.14
+pyttsx3>=2.90
+pyautogui>=0.9.54
+psutil>=5.9.8
+python-dotenv>=1.0.1
+pyperclip>=1.8.2
+requests>=2.31.0
