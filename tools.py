@@ -1,14 +1,15 @@
 """
 tools.py
 --------
-Every function here is something Jarvis can actually DO on your PC.
-Add new abilities by:
-  1. Writing a function below
-  2. Adding its schema to TOOL_SCHEMAS
-  3. Adding it to TOOL_FUNCTIONS at the bottom
+Everything Jarvis can actually DO on your PC lives here. To add a new
+ability:
+  1. Write a function below
+  2. Add its schema to TOOL_SCHEMAS
+  3. Register it in TOOL_FUNCTIONS at the bottom
 
-Claude reads TOOL_SCHEMAS to decide when to call each function,
-then assistant.py executes the matching Python function.
+Whichever AI model assistant.py is currently using reads TOOL_SCHEMAS to
+decide when to call each function, then assistant.py runs the matching
+Python function here. This file doesn't know or care which model that is.
 """
 
 import os
@@ -24,8 +25,7 @@ from pathlib import Path
 
 import memory as mem
 
-# Common Windows apps -> executable names.
-# Add your own frequently-used apps here.
+# App name -> the actual .exe Windows needs to launch it. Add your own here.
 APP_MAP = {
     "notepad": "notepad.exe",
     "calculator": "calc.exe",
@@ -62,7 +62,7 @@ def open_application(app_name: str) -> str:
         elif exe:
             subprocess.Popen(exe, shell=True)
         else:
-            # Fall back to trying it directly (works for many exes on PATH)
+            # not in our map — try running it as-is, works for a lot of exes on PATH
             subprocess.Popen(app_name, shell=True)
         return f"Opened {app_name}."
     except Exception as e:
@@ -88,7 +88,7 @@ def search_web(query: str) -> str:
     return f"Searching the web for '{query}'."
 
 
-# Common sites -> URL. Add your own frequently-visited sites here.
+# Site name -> URL. Add whatever you visit most often.
 WEBSITE_MAP = {
     "youtube": "https://youtube.com",
     "gmail": "https://mail.google.com",
@@ -217,8 +217,8 @@ def set_volume(level: int) -> str:
     """Set system volume to a percentage (0-100). Requires pycaw for precision;
     this version uses keyboard media-key simulation as a simple fallback."""
     level = max(0, min(100, level))
-    # Simple fallback: mute/unmute + repeated key presses toward target isn't precise
-    # without pycaw, so we just report guidance here.
+    # No pycaw installed, so we can't set an exact percentage — just point
+    # the user at their keyboard keys instead of pretending this worked.
     return (
         f"Precise volume control needs the optional 'pycaw' package. "
         f"For now, use your keyboard volume keys. (Requested: {level}%)"
@@ -229,14 +229,15 @@ def calculate(expression: str) -> str:
     """Evaluate a math expression, e.g. '15% of 340' or '(12 + 8) * 3'."""
     import re
 
-    # Normalize common spoken phrasing into math syntax before evaluating
+    # people say things like "12 x 8" or "2^3" out loud, not valid Python
     expr = expression.lower().replace("x", "*").replace("^", "**")
     percent_match = re.match(r"(\d+(\.\d+)?)\s*%\s*of\s*(\d+(\.\d+)?)", expr)
     if percent_match:
         pct, _, base, _ = percent_match.groups()
         return f"{expression} = {float(pct) / 100 * float(base):g}"
 
-    # Only allow digits, operators, parentheses, decimal points, spaces
+    # eval() is dangerous on arbitrary input, so only allow characters that
+    # could possibly form a math expression — no letters, no function calls
     if not re.fullmatch(r"[\d\s\.\+\-\*/\(\)%]+", expr):
         return "That doesn't look like a math expression I can safely evaluate."
     try:
@@ -342,10 +343,9 @@ def list_memories() -> str:
     return mem.list_all_memories()
 
 
-# ---------------------------------------------------------------------------
-# Tool schemas — this is what Claude sees to decide which function to call.
-# Keep descriptions clear; Claude relies entirely on these to pick correctly.
-# ---------------------------------------------------------------------------
+# Everything below is what the AI model actually sees — not the Python code
+# above, just these descriptions. Write them clearly; the model relies on
+# them entirely to pick the right tool and fill in the right arguments.
 TOOL_SCHEMAS = [
     {
         "name": "open_application",

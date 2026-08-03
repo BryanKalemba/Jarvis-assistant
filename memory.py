@@ -23,8 +23,8 @@ DATA_DIR.mkdir(exist_ok=True)
 MEMORY_FILE = DATA_DIR / "memory.json"
 HISTORY_FILE = DATA_DIR / "conversation_history.json"
 
-# Keep saved history bounded so the context sent to Claude (and your API
-# bill) doesn't grow forever. Raise this if you want it to remember further back.
+# Keep saved history bounded so the context sent to the model — and your
+# API usage — doesn't grow forever. Raise this if you want it to remember further back.
 MAX_HISTORY_MESSAGES = 40
 
 
@@ -41,9 +41,7 @@ def _save_json(path: Path, data):
     path.write_text(json.dumps(data, indent=2, default=str))
 
 
-# ---------------------------------------------------------------------------
-# Long-term facts
-# ---------------------------------------------------------------------------
+# --- long-term facts ---
 def remember(key: str, value: str) -> str:
     facts = _load_json(MEMORY_FILE, {})
     facts[key.lower().strip()] = value
@@ -78,9 +76,7 @@ def all_memories_dict() -> dict:
     return _load_json(MEMORY_FILE, {})
 
 
-# ---------------------------------------------------------------------------
-# Conversation history
-# ---------------------------------------------------------------------------
+# --- conversation history ---
 def load_conversation() -> list:
     return _load_json(HISTORY_FILE, [])
 

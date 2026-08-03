@@ -1,5 +1,10 @@
 """
-assistant.py — the main Jarvis loop, running on Google's Gemini API (free tier).
+assistant.py — the main Jarvis loop.
+
+Brain: Google's Gemini API (free tier).
+Ears: faster-whisper, running locally on your CPU — no internet needed
+for speech recognition, and noticeably more accurate than the free web
+API this used to run on.
 
 Flow each cycle:
   0. Idle, listening for the wake word ("Hey Jarvis")
@@ -12,10 +17,12 @@ Run with: python assistant.py
 Press Ctrl+C to quit. Say "goodbye" / "stop listening" after waking it to exit.
 """
 
+import io
 import os
 import sys
 import pyttsx3
 import speech_recognition as sr
+from faster_whisper import WhisperModel
 from dotenv import load_dotenv
 import google.generativeai as genai
 
@@ -25,8 +32,12 @@ import memory as mem
 load_dotenv()
 
 API_KEY = os.getenv("GEMINI_API_KEY")
-MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+MODEL = os.getenv("GEMINI_MODEL", "gemini-3.6-flash")
 NAME = os.getenv("ASSISTANT_NAME", "Jarvis")
+WHISPER_MODEL_SIZE = os.getenv("WHISPER_MODEL", "base.en")
+
+MIC_DEVICE_INDEX = os.getenv("MIC_DEVICE_INDEX")
+MIC_DEVICE_INDEX = int(MIC_DEVICE_INDEX) if MIC_DEVICE_INDEX else None
 
 if not API_KEY or "your-key-here" in API_KEY:
     sys.exit(
@@ -35,6 +46,16 @@ if not API_KEY or "your-key-here" in API_KEY:
     )
 
 genai.configure(api_key=API_KEY)
+
+# Downloads on first run (a couple hundred MB depending on model size), then
+# gets cached locally, so later startups are quick.
+print(f"Loading speech recognition model ({WHISPER_MODEL_SIZE})...")
+whisper_model = WhisperModel(WHISPER_MODEL_SIZE, device="cpu", compute_type="int8")
+
+recognizer = sr.Recognizer()
+recognizer.pause_threshold = 0.8
+recognizer.non_speaking_duration = 0.5
+recognizer.dynamic_energy_threshold = True
 
 SYSTEM_PROMPT_BASE = f"""You are {NAME}, a helpful voice assistant running locally on the
 user's Windows PC. Keep spoken replies SHORT (1-3 sentences) since they'll be read
@@ -46,8 +67,8 @@ proactively save it with the remember_fact tool."""
 
 
 def build_system_prompt() -> str:
-    """Append any previously saved facts so Jarvis 'just knows' them without
-    having to call recall_fact every time."""
+    # Fold in whatever's been saved to memory so Jarvis already knows it,
+    # instead of having to call recall_fact every time it might be relevant.
     facts = mem.all_memories_dict()
     if not facts:
         return SYSTEM_PROMPT_BASE
@@ -56,10 +77,9 @@ def build_system_prompt() -> str:
 
 
 def _uppercase_types(schema):
-    """Gemini's function-calling schema expects JSON-schema 'type' values in
-    UPPERCASE (STRING, OBJECT, INTEGER...), unlike Anthropic's lowercase
-    convention that tools.py was originally written for. This recursively
-    converts one to the other so tools.py itself never has to change."""
+    # tools.py writes schemas the way Anthropic expects (lowercase types like
+    # "string"). Gemini wants the same info but uppercase ("STRING"). Rather
+    # than maintain two versions of every schema, we just convert on the fly.
     if isinstance(schema, dict):
         converted = {}
         for key, value in schema.items():
@@ -75,8 +95,6 @@ def _uppercase_types(schema):
     return schema
 
 
-# Build Gemini's tool format once at startup from the same TOOL_SCHEMAS used
-# elsewhere — tools.py doesn't need to know or care which AI provider is used.
 GEMINI_TOOLS = [{
     "function_declarations": [
         {
@@ -100,37 +118,38 @@ def speak(text: str):
 
 
 def listen(timeout: float | None = 6, phrase_time_limit: float | None = 12) -> str | None:
-    """Record one phrase from the mic and transcribe it. timeout=None waits
-    indefinitely for speech to start (used while idling for the wake word)."""
-    recognizer = sr.Recognizer()
-    with sr.Microphone() as source:
-        recognizer.adjust_for_ambient_noise(source, duration=0.5)
+    """Record one phrase from the mic and transcribe it with Whisper.
+    timeout=None waits indefinitely for speech to start — used while idling
+    for the wake word."""
+    with sr.Microphone(device_index=MIC_DEVICE_INDEX) as source:
+        recognizer.adjust_for_ambient_noise(source, duration=1.0)
         try:
             audio = recognizer.listen(source, timeout=timeout, phrase_time_limit=phrase_time_limit)
         except sr.WaitTimeoutError:
             return None
-    try:
-        text = recognizer.recognize_google(audio)
-        print(f"You: {text}")
-        return text
-    except sr.UnknownValueError:
+
+    # Whisper wants raw audio, not a SpeechRecognition AudioData object, so
+    # we hand it a WAV in memory instead of writing a temp file to disk.
+    wav_bytes = audio.get_wav_data()
+    segments, _ = whisper_model.transcribe(io.BytesIO(wav_bytes), language="en")
+    text = "".join(segment.text for segment in segments).strip()
+
+    if not text:
         return None
-    except sr.RequestError as e:
-        print(f"Speech recognition error: {e}")
-        return None
+    print(f"You: {text}")
+    return text
 
 
-WAKE_PHRASES = ["hey jarvis", "hello jarvis", "ok jarvis"]
+WAKE_PHRASES = ["hey jarvis", "hello jarvis", "ok jarvis", "jarvis"]
 
-# Tools that need a spoken "yes" before they actually run — irreversible or
-# disruptive actions. Add tool names here as you add more risky tools.
-DESTRUCTIVE_TOOLS = {"shutdown_computer", "restart_computer"}
+# Anything in here gets a spoken "are you sure?" before it actually runs.
+DESTRUCTIVE_TOOLS = {"shutdown_computer", "restart_computer", "close_application"}
 CONFIRM_WORDS = {"yes", "yeah", "yep", "yup", "confirm", "do it", "go ahead", "sure", "affirmative"}
 
 
 def confirm_action(prompt: str) -> bool:
-    """Speak a yes/no question and listen for an affirmative response.
-    Anything unclear or negative is treated as 'no' — better to fail safe."""
+    """Ask a yes/no question out loud and listen for the answer. Anything
+    unclear, silent, or negative counts as 'no' — better to fail safe."""
     speak(prompt)
     response = listen(timeout=6, phrase_time_limit=6)
     if not response:
@@ -140,10 +159,10 @@ def confirm_action(prompt: str) -> bool:
 
 
 def wait_for_wake_word() -> str:
-    """Block until 'hey jarvis' (or a close variant) is heard. If the user
-    said their whole request in the same breath ('hey jarvis what time is
-    it'), return the leftover command text so we can skip listening again.
-    Returns '' if only the wake phrase was said."""
+    """Block until 'hey jarvis' (or a variant) is heard. If the whole
+    request was said in one breath ('hey jarvis what time is it'), return
+    the leftover text so we can skip listening a second time. Returns ''
+    if only the wake word itself was said."""
     print(f"\n💤 Waiting for wake word — say 'Hey Jarvis'...")
     while True:
         text = listen(timeout=None, phrase_time_limit=10)
@@ -154,17 +173,16 @@ def wait_for_wake_word() -> str:
             if phrase in lowered:
                 remainder = lowered.split(phrase, 1)[1].strip(" ,.")
                 return remainder
-        # Heard speech, but not the wake word — ignore it and keep waiting
+        # not the wake word — ignore it and keep waiting
 
 
 def ask_gemini(conversation: list) -> str:
-    """Send conversation to Gemini, handle any tool calls, return final text reply.
+    """Send the conversation to Gemini, run any tools it asks for, and
+    return its final spoken-friendly reply.
 
-    conversation is a list of Gemini "Content" dicts:
-      {"role": "user"/"model"/"function", "parts": [...]}
-    This differs from Anthropic's format, which is why memory.json's shape
-    will look a little different than it did under Claude — that's expected.
-    """
+    conversation entries look like {"role": "user"/"model", "parts": [...]}.
+    Tool results get sent back as a "user" turn — Gemini's current API
+    doesn't accept a dedicated "function" role like older docs suggest."""
     model = genai.GenerativeModel(
         model_name=MODEL,
         system_instruction=build_system_prompt(),
@@ -179,13 +197,10 @@ def ask_gemini(conversation: list) -> str:
         function_calls = [p.function_call for p in parts if p.function_call.name]
 
         if not function_calls:
-            # Plain text reply — we're done
             reply = "".join(p.text for p in parts if p.text)
             conversation.append({"role": "model", "parts": [{"text": reply}]})
             return reply.strip()
 
-        # Gemini wants to use one or more tools. Record its request, then
-        # execute each call and package the results as a "function" turn.
         conversation.append({
             "role": "model",
             "parts": [{"function_call": {"name": fc.name, "args": dict(fc.args)}} for fc in function_calls],
@@ -200,7 +215,10 @@ def ask_gemini(conversation: list) -> str:
             if not func:
                 result = f"Unknown tool: {name}"
             elif name in DESTRUCTIVE_TOOLS:
-                action_label = name.replace("_", " ")
+                if name == "close_application" and "app_name" in args:
+                    action_label = f"close {args['app_name']}"
+                else:
+                    action_label = name.replace("_", " ")
                 if confirm_action(f"Are you sure you want to {action_label}?"):
                     try:
                         result = func(**args)
@@ -219,15 +237,22 @@ def ask_gemini(conversation: list) -> str:
                 "function_response": {"name": name, "response": {"result": str(result)}}
             })
 
-        conversation.append({"role": "function", "parts": function_response_parts})
+        conversation.append({"role": "user", "parts": function_response_parts})
         response = model.generate_content(conversation)
-        # loop again so Gemini can respond to the tool result
+        # ask again so Gemini can react to what the tool returned
 
 
 def main():
     print(f"{NAME} is online. Say 'Hey Jarvis' to wake me, or Ctrl+C to quit.\n")
     conversation = mem.load_conversation()
-    if conversation:
+
+    # If this history was saved under a different AI provider (different
+    # message shape), don't crash on it — just start over.
+    if conversation and not all(isinstance(m, dict) and "parts" in m for m in conversation):
+        print("(previous conversation was saved in an incompatible format — starting fresh)")
+        conversation = []
+        mem.clear_conversation()
+    elif conversation:
         print(f"(resuming previous conversation — {len(conversation)} messages loaded)")
 
     while True:
@@ -235,7 +260,6 @@ def main():
             leftover_command = wait_for_wake_word()
 
             if leftover_command:
-                # User said the command in the same breath as the wake word
                 text = leftover_command
             else:
                 speak("Yes?")
@@ -252,7 +276,7 @@ def main():
             conversation.append({"role": "user", "parts": [{"text": text}]})
             reply = ask_gemini(conversation)
             speak(reply)
-            mem.save_conversation(conversation)  # save after every turn, not just on exit
+            mem.save_conversation(conversation)
 
         except KeyboardInterrupt:
             mem.save_conversation(conversation)
