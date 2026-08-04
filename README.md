@@ -1,25 +1,41 @@
 # Jarvis — Personal Voice Assistant (Windows)
 
-A local voice assistant that listens to you, thinks using Google's Gemini
-(free tier), and takes real actions on your PC (opens apps, searches the
-web, manages files, takes screenshots, reports system status, and more).
+A voice assistant that listens to you, thinks, and takes real actions on
+your PC (opens apps, searches the web, manages files, takes screenshots,
+reports system status, and more). It can think using either **Google's
+Gemini** (cloud, free tier) or **a local model via Ollama** — switch
+between them with one line in `.env`, everything else stays identical.
 
-> **Note on the free tier:** Gemini's free tier has no cost and no credit
-> card requirement, but it does have rate limits (requests per minute/day)
-> that vary by model and can change over time — check
-> https://ai.google.dev/gemini-api/docs/rate-limits if you hit one. For
-> personal use talking to Jarvis a handful of times, you're unlikely to
-> come close to the daily cap.
+|  | Gemini (`AI_PROVIDER=gemini`) | Ollama (`AI_PROVIDER=ollama`) |
+|---|---|---|
+| Cost | Free tier, no card needed | Free forever |
+| Setup | API key only | Install Ollama + pull a model (multi-GB) |
+| Hardware | None — runs in the cloud | 8GB+ free RAM for a usable model |
+| Tool-calling reliability | Solid | Noticeably weaker — expect more wrong-tool moments |
+| Internet required | Yes, every request | No — fully offline once set up |
+| Rate limits | Yes | None |
+
+Not sure which to use? Gemini for the smoothest experience, Ollama if you
+want zero dependency on any cloud account. You can switch any time.
 
 ## How it works
 
 ```
- Mic → Whisper (local speech-to-text) → Gemini (decides what to do) → runs a Python tool → speaks reply
+ Mic → Whisper (local speech-to-text) → Gemini or Ollama (decides what to do) → runs a Python tool → edge-tts speaks the reply
 ```
 
-Gemini uses native **tool calling**: you don't need to write any
+Both providers use native **tool calling**: you don't write any
 intent-parsing logic yourself. You just describe each ability in
-`tools.py`, and the model decides when to use it based on what you say.
+`tools.py`, and whichever model is active decides when to use it based on
+what you say.
+
+> **Switching providers later:** saved conversation history is shaped
+> differently between the two (Gemini needs `"parts"`, Ollama needs
+> `"content"`), so if you switch `AI_PROVIDER` after having used the other
+> one for a while, Jarvis will print a note and start the conversation
+> fresh rather than crash on the old shape. Your saved memory facts in
+> `data/memory.json` aren't affected either way — those aren't tied to a
+> provider.
 
 ## Setup
 
@@ -35,27 +51,36 @@ intent-parsing logic yourself. You just describe each ability in
    > pipwin install pyaudio
    > ```
 
-3. **Get a free Gemini API key:** https://aistudio.google.com/apikey
-   No credit card required — Google's free tier gives you a standing daily
-   quota on Flash-class models, which is what this project uses by default.
+3. **Copy `.env.example` to `.env`**, then set `AI_PROVIDER` to whichever
+   you want to use, and follow the matching setup below.
 
-4. **Configure your key:**
-   - Copy `.env.example` to `.env`
-   - Paste your key into `GEMINI_API_KEY=`
-   - The default model (`gemini-3.6-flash`) is a good starting point; check
-     https://ai.google.dev/gemini-api/docs/pricing if you want to see current
-     free-tier options, since model names/limits do shift over time — Google
-     periodically retires older model IDs for new API keys (this happened to
-     `gemini-2.5-flash` around mid-2026), so if you ever get a "no longer
-     available to new users" error, that page will have the current name
+   **If `AI_PROVIDER=gemini`:**
+   - Get a free key (no credit card) at https://aistudio.google.com/apikey
+   - Paste it into `GEMINI_API_KEY=`
+   - `GEMINI_MODEL` defaults to `gemini-3.6-flash`; Google occasionally
+     retires model names, so if you get a "no longer available" error,
+     check https://ai.google.dev/gemini-api/docs/pricing for the current one
 
-5. **Run it:**
+   **If `AI_PROVIDER=ollama`:**
+   - Install Ollama from https://ollama.com — it installs like a normal
+     app and runs quietly in the background afterward
+   - Pull a model that supports tool calling:
+     ```powershell
+     ollama pull llama3.1
+     ```
+     This is an ~4.7GB download and needs roughly 8GB of free RAM. If
+     that's too much for your PC, `ollama pull llama3.2` is a much lighter
+     3B model — faster, but noticeably worse at picking the right tool. If
+     your PC can handle more, `qwen2.5:14b` or `mistral-nemo` tend to be
+     more reliable at tool calling than either of the above.
+   - Make sure `OLLAMA_MODEL` in `.env` matches whatever you pulled
+
+4. **Run it:**
    ```powershell
    python assistant.py
    ```
-   The first time you run it, it'll download the Whisper speech model
-   (a couple hundred MB) before starting up — that's a one-time thing,
-   later runs load it from a local cache and start much faster.
+   The first run also downloads the Whisper speech model (a couple
+   hundred MB) before starting up — a one-time thing, cached after that.
 
    Jarvis idles quietly until you say **"Hey Jarvis"** (also accepts "Hello
    Jarvis", "OK Jarvis", or just "Jarvis" on its own). You can either:
@@ -161,6 +186,31 @@ WHISPER_MODEL=small.en
 `small.en`/`medium.en` are more accurate but slower on CPU — the right
 choice depends on how much your PC can chew through in real time.
 
+## Changing how it sounds
+
+Jarvis speaks with `edge-tts` — Microsoft's free neural voices, the same
+tech behind "Read Aloud" in Edge. Much more natural than the classic
+robotic Windows TTS voice it used to run on.
+
+To change the voice, set `TTS_VOICE` in `.env`. A few solid options are
+listed there already; to see the full list, run:
+```powershell
+edge-tts --list-voices
+```
+
+**Heads up on internet dependency:** Whisper (hearing) always runs fully
+offline, no matter which `AI_PROVIDER` you're using. TTS output goes out
+to Microsoft's servers, and if `AI_PROVIDER=gemini`, the "thinking" part
+needs internet too — only `AI_PROVIDER=ollama` gets you a fully offline
+setup, and even then only if edge-tts also has no connection (it falls
+back automatically rather than failing silently). If edge-tts can't reach
+the internet for any reason, Jarvis uses the offline `pyttsx3` voice
+instead — you'll see a note in the console, and it'll sound noticeably
+more robotic until the connection's back. If you want Jarvis fully
+air-gapped, use `AI_PROVIDER=ollama` and skip installing `edge-tts`/`pygame`
+— the `try` block will fail immediately and fall through to the offline
+voice every time.
+
 ## Extending it — add your own abilities
 
 Open `tools.py` and:
@@ -173,13 +223,13 @@ That's the whole pattern — no other code changes needed. Ideas to add next:
 - **Email**: send/read Gmail via the `google-api-python-client`
 - **Calendar**: check/add events via Google Calendar API
 - **Smart volume control**: install `pycaw` for precise volume/mute control
-- **Better voice**: swap `pyttsx3` (robotic, offline) for `edge-tts`
-  (free, much more natural, needs internet) or ElevenLabs (paid, best quality)
+- **Even better voice**: `edge-tts` is already wired in, but if you want
+  the best quality available, ElevenLabs (paid) is a further step up
 
 ## Safety notes
 
 - **Shutdown, restart, and closing apps all require spoken confirmation.**
-  If Gemini decides to call `shutdown_computer`, `restart_computer`, or
+  If the model decides to call `shutdown_computer`, `restart_computer`, or
   `close_application`, Jarvis will ask "Are you sure...?" (naming the
   specific app for close requests) and only proceeds on a clear "yes."
   Anything unclear, silent, or negative is treated as "no" — it fails safe
@@ -198,10 +248,12 @@ That's the whole pattern — no other code changes needed. Ideas to add next:
   overwriting files.
 - Keep your `.env` file out of version control (already covered by the
   included `.gitignore`).
-- Speech recognition runs locally via Whisper — your voice never leaves
-  your PC for the "hearing" part. Your typed-out commands and Jarvis's
-  replies still go to Gemini's servers to generate responses, same as any
-  cloud AI assistant.
+- Speech recognition always runs locally via Whisper — your voice never
+  leaves your PC regardless of `AI_PROVIDER`. Your transcribed commands do
+  go to Google's servers if `AI_PROVIDER=gemini`; with `AI_PROVIDER=ollama`
+  they stay on your machine. edge-tts's voice output talks to Microsoft's
+  servers either way, unless it falls back to the offline voice (see the
+  voice section above).
 - Saved memory (`data/memory.json`) is plain-text JSON on disk — fine for
   low-stakes info like a wifi password, not a substitute for a real
   password manager.

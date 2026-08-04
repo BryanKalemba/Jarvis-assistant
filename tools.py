@@ -101,6 +101,7 @@ WEBSITE_MAP = {
     "amazon": "https://amazon.com",
     "claude": "https://claude.ai",
     "steam": "https://store.steampowered.com",
+    "loaded": "https://www.loaded.com/?irclickid=WK5RYD0e9xycUX40IkQlDWEJUkuSA1xPiXAdSo0&utm_source=impact&utm_medium=affiliate&utm_campaign=Opera%E2%80%8A&utm_id=1943907&irgwc=1&afsrc=1"
 }
 
 
