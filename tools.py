@@ -151,21 +151,6 @@ def open_website(site: str) -> str:
 STEAM_GAMES = {
     # "counter-strike 2": "730",
     # "elden ring": "1245620",
-    "expedition 33": "1903340",
-    "baldur's gate 3": "1086940",
-    "cyberpunk": "1091500",
-    "marvel rivals": "2767030",
-    "stellar blade": "3489700",
-    "persona 3 reload": "2161700",
-    "Persona 3": "2161700",
-    "persona": "2161700",
-    "marvel Tokon": "3787240",
-    "marvel tocon": "3787240",
-    "marvel token": "3787240",
-    "marvel": "3787240",
-    "tokon": "3787240",
-    "tocon": "3787240",
-    "token": "3787240",
 }
 
 
