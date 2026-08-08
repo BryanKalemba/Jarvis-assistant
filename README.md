@@ -125,6 +125,27 @@ what you say.
    > detection later, look into `openwakeword` or `pvporcupine` (Picovoice)
    > — both support training a custom, always-listening wake-word model.
 
+## Diagnosing problems
+
+**Run this first if anything isn't working:**
+```powershell
+python selftest.py
+```
+It checks everything Jarvis needs — packages installed, `.env` configured
+correctly, the AI provider actually reachable (with a real test request,
+not just "is the key present"), your microphone, the Whisper model,
+text-to-speech, and more — and tells you exactly what's wrong instead of
+you having to guess from a crash. Safe to run any time, including while
+Jarvis itself isn't running.
+
+**Everything also gets logged to `data/jarvis.log`** — every message
+Jarvis hears/says, every tool it runs, and the full error details (not
+just a one-line summary) whenever something goes wrong. The console or
+GUI transcript scrolls away, but the log file sticks around, so if
+something breaks, check there first — or paste the relevant lines when
+asking for help. It's capped at a few MB with automatic rotation, so it
+won't grow forever.
+
 ## Running Jarvis automatically on startup
 
 Two ways to do this — pick whichever fits how much control you want.

@@ -31,11 +31,14 @@ _history_is_compatible() below.
 
 import asyncio
 import io
+import logging
 import os
 import sys
 import tempfile
 import threading
 import uuid
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
 import edge_tts
 import ollama
 import pygame
@@ -49,6 +52,20 @@ from tools import TOOL_SCHEMAS, TOOL_FUNCTIONS
 import memory as mem
 
 load_dotenv()
+
+# Everything Jarvis says/hears/does gets logged to a file, not just shown
+# on screen — the console or GUI scrolls away, but this sticks around so a
+# problem can be diagnosed from the actual log instead of a screenshot.
+# Capped size + a few backups so it doesn't grow forever.
+LOG_DIR = Path(__file__).parent / "data"
+LOG_DIR.mkdir(exist_ok=True)
+LOG_FILE = LOG_DIR / "jarvis.log"
+
+logger = logging.getLogger("jarvis")
+logger.setLevel(logging.INFO)
+_file_handler = RotatingFileHandler(LOG_FILE, maxBytes=2_000_000, backupCount=3, encoding="utf-8")
+_file_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S"))
+logger.addHandler(_file_handler)
 
 AI_PROVIDER = os.getenv("AI_PROVIDER", "ollama").strip().lower()
 if AI_PROVIDER not in ("gemini", "ollama"):
@@ -199,6 +216,7 @@ def set_status(status: str):
 
 
 def emit(kind: str, text: str):
+    logger.info(f"[{kind}] {text}")
     if _output_hook:
         _output_hook(kind, text)
     else:
@@ -637,6 +655,7 @@ def text_input_loop(conversation: list):
 
 def main():
     model_label = GEMINI_MODEL if AI_PROVIDER == "gemini" else OLLAMA_MODEL
+    logger.info(f"=== Jarvis starting (console) — provider={AI_PROVIDER}, model={model_label} ===")
     print(f"{NAME} is online (running on {model_label} via {AI_PROVIDER}).")
     print("Say 'Hey Jarvis' to wake me, or just type a message any time. Ctrl+C to quit.\n")
     conversation = mem.load_conversation()
@@ -666,15 +685,18 @@ def main():
             if text.lower().strip(" .!") in EXIT_PHRASES:
                 speak("Goodbye.")
                 mem.save_conversation(conversation)
+                logger.info("=== Jarvis shutting down (said goodbye) ===")
                 break
 
             process_turn(text, conversation, mode="voice")
 
         except KeyboardInterrupt:
             mem.save_conversation(conversation)
+            logger.info("=== Jarvis shutting down (Ctrl+C) ===")
             print("\nShutting down (conversation saved).")
             break
         except Exception as e:
+            logger.exception("Error in main loop")
             print(f"Error: {e}")
 
 
