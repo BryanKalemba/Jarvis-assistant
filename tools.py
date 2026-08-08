@@ -49,6 +49,7 @@ APP_MAP = {
     "teams": "ms-teams.exe",
     "outlook": "outlook.exe",
     "firefox": "firefox.exe",
+    "opera gx": "opera.exe",  # shares an exe name with regular Opera — closing one closes both if you have both installed
 }
 
 
@@ -59,11 +60,36 @@ def open_application(app_name: str) -> str:
     try:
         if exe and exe.startswith("start "):
             os.system(exe)
+            return f"Opened {app_name}."
         elif exe:
+            # known, trusted command — fire and forget, no need to wait
             subprocess.Popen(exe, shell=True)
+            return f"Opened {app_name}."
+        elif key in STEAM_GAMES:
+            # the model calling this tool for a game (instead of
+            # launch_steam_game) is a common mix-up — since we already
+            # know it's in STEAM_GAMES, just launch it correctly instead
+            # of failing on a technicality
+            return launch_steam_game(app_name)
         else:
-            # not in our map — try running it as-is, works for a lot of exes on PATH
-            subprocess.Popen(app_name, shell=True)
+            # not in our map — a lot of real exes on PATH still launch fine
+            # this way, but plenty of things people ask for (streaming
+            # services, websites) aren't real programs at all and will
+            # silently "succeed" at spawning a shell that just errors out.
+            # A short synchronous check catches that instead of lying about it.
+            result = subprocess.run(
+                app_name, shell=True, capture_output=True, text=True, timeout=3
+            )
+            if result.returncode != 0:
+                return (
+                    f"Couldn't find an installed app called '{app_name}'. "
+                    f"If it's a website or streaming service, try opening it "
+                    f"as a website instead."
+                )
+            return f"Opened {app_name}."
+    except subprocess.TimeoutExpired:
+        # still running after 3s with no error — a real app that's just
+        # slow to fully launch, not a failure
         return f"Opened {app_name}."
     except Exception as e:
         return f"Couldn't open {app_name}: {e}"
@@ -101,7 +127,6 @@ WEBSITE_MAP = {
     "amazon": "https://amazon.com",
     "claude": "https://claude.ai",
     "steam": "https://store.steampowered.com",
-    "loaded": "https://www.loaded.com/?irclickid=WK5RYD0e9xycUX40IkQlDWEJUkuSA1xPiXAdSo0&utm_source=impact&utm_medium=affiliate&utm_campaign=Opera%E2%80%8A&utm_id=1943907&irgwc=1&afsrc=1"
 }
 
 
@@ -126,6 +151,7 @@ def open_website(site: str) -> str:
 STEAM_GAMES = {
     # "counter-strike 2": "730",
     # "elden ring": "1245620",
+
 }
 
 
@@ -350,7 +376,10 @@ def list_memories() -> str:
 TOOL_SCHEMAS = [
     {
         "name": "open_application",
-        "description": "Open a desktop application by name.",
+        "description": "Open an installed desktop application by name (e.g. Notepad, Chrome, "
+        "Spotify). NOT for websites/streaming services (use open_website) and NOT for video "
+        "games (use launch_steam_game) — those go through different tools even if this one "
+        "would technically also launch them.",
         "input_schema": {
             "type": "object",
             "properties": {"app_name": {"type": "string", "description": "e.g. notepad, chrome, spotify"}},
@@ -511,7 +540,8 @@ TOOL_SCHEMAS = [
     },
     {
         "name": "launch_steam_game",
-        "description": "Launch a video game through Steam by name.",
+        "description": "Launch a video game by name (through Steam). Use this for ANY video "
+        "game the user names, even if you're not sure it's on Steam — not open_application.",
         "input_schema": {
             "type": "object",
             "properties": {"game_name": {"type": "string"}},

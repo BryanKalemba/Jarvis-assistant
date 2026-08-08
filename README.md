@@ -77,22 +77,46 @@ what you say.
 
 4. **Run it:**
    ```powershell
-   python assistant.py
+   python gui.py
    ```
-   The first run also downloads the Whisper speech model (a couple
-   hundred MB) before starting up — a one-time thing, cached after that.
+   This opens a window with the conversation transcript, a status
+   indicator (idle/listening/thinking/speaking), and a text box you can
+   type into. The first run also downloads the Whisper speech model (a
+   couple hundred MB) before starting up — a one-time thing, cached after
+   that.
+
+   > Prefer a plain console instead? `python assistant.py` runs the exact
+   > same Jarvis with no window, just terminal output — useful for
+   > debugging, or if you just don't want a GUI. Everything below applies
+   > to both equally unless noted otherwise.
 
    Jarvis idles quietly until you say **"Hey Jarvis"** (also accepts "Hello
    Jarvis", "OK Jarvis", or just "Jarvis" on its own). You can either:
    - Say the wake word alone, wait for "Yes?", then speak your command, or
    - Say it all in one breath: *"Hey Jarvis, what time is it"*
 
+   **You can also just type instead of talking** — no wake word needed for
+   that, just type in the text box (or the console, if you're running
+   `assistant.py`) and hit Enter. Voice and typed input both work at the
+   same time; type "goodbye" or say it, either way exits.
+
+   **You can interrupt Jarvis mid-reply** by saying "Hey Jarvis" again
+   while it's talking — it cuts off immediately and listens for whatever
+   you say next, picking up right where the interruption happened rather
+   than making you start over. This only works for replies to things you
+   said out loud, not typed commands — see the note in `speak()` in
+   `assistant.py` for why. There's no hardware echo cancellation here
+   either, so Jarvis is technically hearing its own voice while it talks
+   along with yours; a false interrupt is possible if a reply happens to
+   say something close to "Jarvis."
+
    > Heads up: with a one-word wake option like "Jarvis," casually saying
    > the name mid-conversation about something unrelated will also wake it.
    > Remove `"jarvis"` from `WAKE_PHRASES` in `assistant.py` if that's
    > more annoying than convenient for you.
 
-   Say "goodbye" after waking it to exit, or Ctrl+C any time.
+   Say "goodbye" after waking it to exit, or Ctrl+C (console) / close the
+   window (GUI) any time.
 
    > **How this wake word works:** it's continuously transcribing short
    > bursts of speech (locally, via Whisper) and checking if "hey jarvis"
@@ -100,6 +124,47 @@ what you say.
    > simple and works well for personal use, but if you want lower latency
    > detection later, look into `openwakeword` or `pvporcupine` (Picovoice)
    > — both support training a custom, always-listening wake-word model.
+
+## Running Jarvis automatically on startup
+
+Two ways to do this — pick whichever fits how much control you want.
+
+**Option A: Startup folder (quick, simple)**
+
+1. Press `Win + R`, type `shell:startup`, hit Enter — this opens your
+   personal Startup folder.
+2. Right-click → New → Shortcut.
+3. Point it at `start_jarvis.bat` in your Jarvis folder.
+4. Done — it'll launch the GUI every time you log in.
+
+**Option B: Task Scheduler (more reliable, more control)**
+
+Better if you want it to wait a few seconds after login (so your network
+and audio devices are fully ready), or restart automatically if it crashes.
+
+1. Open Task Scheduler (search for it in the Start menu).
+2. Create Task (not "Basic Task" — the full dialog gives you more options).
+3. **General tab:** name it "Jarvis", check "Run only when user is logged on".
+4. **Triggers tab:** New → "At log on" → optionally add a 15-30 second
+   delay so mic/audio drivers are ready before it starts listening.
+5. **Actions tab:** New → Action: "Start a program" → Program/script:
+   the full path to `start_jarvis.bat` → Start in: your Jarvis folder path
+   (important — without this it may not find `tools.py`/`.env`).
+6. **Conditions/Settings tabs:** uncheck "Start the task only if the
+   computer is on AC power" if this is a laptop, otherwise it won't start
+   on battery.
+
+> **Heads up:** `start_jarvis.bat` runs `python gui.py`, which opens the
+> GUI window — but since it's launched via `python.exe`, a console window
+> also opens behind it (that's just how `python.exe` works; it always
+> attaches a console). If you want the GUI to be the *only* window, no
+> console at all, edit `start_jarvis.bat` and change `python gui.py` to
+> `pythonw gui.py` — `pythonw.exe` runs the same script with no console
+> attached. The tradeoff: if `gui.py` fails to start at all (rather than
+> erroring after the window opens), you won't see why, since there's
+> nowhere for that error to print to. Worth getting it running reliably
+> with the console visible first, then switching to `pythonw` once you're
+> confident in it.
 
 ## What it can do out of the box
 
@@ -176,8 +241,9 @@ still cutting you off too early or waiting too long after you finish.
 voice with `faster-whisper` running on your own CPU — no internet needed
 for the "hearing" part, and noticeably more accurate than a free web API,
 especially with accents or background noise. The tradeoff is startup time:
-the model loads into memory once when you run `python assistant.py` (a
-couple seconds after the first run, which also downloads it). If it's
+the model loads into memory once when you start Jarvis (a couple seconds
+after the first run, which also downloads it), whether that's `python
+gui.py` or `python assistant.py`. If it's
 still mishearing you, try a bigger model in `.env`:
 ```
 WHISPER_MODEL=small.en
@@ -185,6 +251,17 @@ WHISPER_MODEL=small.en
 `tiny.en` is fastest but least accurate, `base.en` is the default balance,
 `small.en`/`medium.en` are more accurate but slower on CPU — the right
 choice depends on how much your PC can chew through in real time.
+
+**5. Short, isolated words (like a bare "Jarvis") are the hardest case for
+Whisper** — it's built for longer-form speech, and can occasionally
+mishear or even hallucinate something else entirely for a single quick
+word with no surrounding context. `listen()` already nudges around this
+by telling Whisper what to expect (`initial_prompt`) and filtering out
+silence/noise that can trigger hallucinated text (`vad_filter`), which
+should measurably help "Jarvis" alone get recognized reliably. If it's
+still inconsistent, `WHISPER_MODEL=small.en` tends to handle short
+isolated words better than `base.en` — or just lean on "Hey Jarvis"
+instead, which gives Whisper more audio to work with per attempt.
 
 ## Changing how it sounds
 
@@ -228,13 +305,23 @@ That's the whole pattern — no other code changes needed. Ideas to add next:
 
 ## Safety notes
 
-- **Shutdown, restart, and closing apps all require spoken confirmation.**
-  If the model decides to call `shutdown_computer`, `restart_computer`, or
+- **Shutdown, restart, and closing apps all require confirmation.** If the
+  model decides to call `shutdown_computer`, `restart_computer`, or
   `close_application`, Jarvis will ask "Are you sure...?" (naming the
-  specific app for close requests) and only proceeds on a clear "yes."
-  Anything unclear, silent, or negative is treated as "no" — it fails safe
-  rather than assuming consent. This check happens in Python, not by asking
-  the model nicely, so it can't be talked around by rephrasing the request.
+  specific app for close requests) and only proceeds on a clear "yes" —
+  spoken if you triggered the command by voice, typed if you triggered it
+  by text. Anything unclear, silent, or negative is treated as "no" — it
+  fails safe rather than assuming consent. This check happens in Python,
+  not by asking the model nicely, so it can't be talked around by
+  rephrasing the request.
+- Voice and typed input run on separate threads but share one lock, so
+  only one command is ever being processed at a time — a typed message and
+  a spoken command can't talk over each other or corrupt the conversation
+  history. Typed confirmations are deliberately kept on the keyboard
+  rather than falling back to the mic, since the voice loop can sit
+  blocked on the microphone indefinitely while idling for the wake word —
+  letting a typed confirmation also reach for the mic could mean waiting
+  forever for a turn that never comes.
 - To make another tool require confirmation, add its name to
   `DESTRUCTIVE_TOOLS` in `assistant.py`.
 - `lock_computer` does **not** require confirmation since it's instantly
